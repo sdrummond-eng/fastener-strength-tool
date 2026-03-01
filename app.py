@@ -19,11 +19,13 @@ import streamlit as st
 from fastener_data import (
     INCH_GRADES, INCH_GRADE_NOTES,
     METRIC_GRADES, METRIC_GRADE_NOTES,
-    UNC_THREADS, METRIC_THREADS,
+    UNC_THREADS, UNF_THREADS, METRIC_THREADS,
     calc_proof_load_inch, calc_proof_load_metric,
     calc_factor_of_safety,
     calc_torque_tension, calc_torque_tension_metric,
     calc_thread_strip_inch, calc_thread_strip_metric,
+    validate_tensile_inputs, validate_torque_inputs,
+    validate_strip_inputs, render_validations,
 )
 from pdf_report import generate_pdf_report
 
@@ -81,7 +83,7 @@ if "strip_data_for_pdf" not in st.session_state:
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("🔩 Fastener Calculator")
-    st.caption("v2.10  |  SAE J429 · ISO 898-1 · VDI 2230 · ASME B1.1/B1.13M")
+    st.caption("v2.20  |  SAE J429 · ISO 898-1 · VDI 2230 · ASME B1.1/B1.13M")
     st.divider()
 
     unit_system = st.radio(
@@ -95,16 +97,20 @@ with st.sidebar:
 
     if is_inch:
         selected_grade  = st.selectbox("**SAE Grade**", list(INCH_GRADES.keys()))
-        selected_thread = st.selectbox("**Thread Size (UNC)**", list(UNC_THREADS.keys()))
+        thread_series   = st.radio("**Thread Series**", ["UNC", "UNF"], horizontal=True,
+                                   help="UNC = Unified National Coarse, UNF = Unified National Fine")
+        thread_table    = UNF_THREADS if thread_series == "UNF" else UNC_THREADS
+        selected_thread = st.selectbox("**Thread Size**", list(thread_table.keys()))
         grade_note = INCH_GRADE_NOTES[selected_grade]
         Sy, Su, Sp = INCH_GRADES[selected_grade]
-        dia, tpi, At = UNC_THREADS[selected_thread]
+        dia, tpi, At = thread_table[selected_thread]
         force_unit  = "lbf"
         stress_unit = "psi"
         length_unit = "in"
         torque_unit = "in·lbf"
         area_unit   = "in²"
     else:
+        thread_series   = "Metric"
         selected_grade  = st.selectbox("**ISO Property Class**", list(METRIC_GRADES.keys()))
         selected_thread = st.selectbox("**Thread Size (Metric Coarse)**", list(METRIC_THREADS.keys()))
         grade_note = METRIC_GRADE_NOTES[selected_grade]
@@ -125,6 +131,12 @@ with st.sidebar:
     c2.metric(f"Su ({stress_unit})", f"{Su:,}")
     c1.metric(f"Sy ({stress_unit})", f"{Sy:,}")
     c2.metric(f"At ({area_unit})",   f"{At}")
+    if is_inch:
+        c1.metric("Threads per Inch", f"{tpi} TPI")
+        c2.metric("Nominal Dia (in)", f"{dia}")
+    else:
+        c1.metric("Pitch (mm)", f"{pitch}")
+        c2.metric("Nominal Dia (mm)", f"{dia}")
     st.caption("At = tabulated tensile stress area (Machinery's Hbk 31e)")
 
     st.divider()
@@ -222,7 +234,7 @@ which match published test data and are required by SAE J429 / ISO 898-1.
         st.subheader("Results")
 
         if is_inch:
-            r = calc_proof_load_inch(selected_thread, selected_grade)
+            r = calc_proof_load_inch(selected_thread, selected_grade, thread_series)
             proof_cap   = r["proof_load_lbf"]
             tensile_cap = r["tensile_cap_lbf"]
             yield_cap   = r["yield_cap_lbf"]
@@ -270,6 +282,15 @@ which match published test data and are required by SAE J429 / ISO 898-1.
         tensile_pdf_data["applied_load"] = applied
         tensile_pdf_data["fos_rows"] = fos_rows_for_pdf
         st.session_state.tensile_data_for_pdf = tensile_pdf_data
+
+        # Validation warnings
+        warnings = validate_tensile_inputs(
+            applied, proof_cap, tensile_cap, yield_cap, force_unit
+        )
+        if warnings:
+            st.divider()
+            st.subheader("⚠️ Validation Warnings")
+            render_validations(warnings)
 
     with st.expander("📐 Show Equations & Standard References"):
         st.markdown(f"""
@@ -367,7 +388,7 @@ measure K experimentally with a torque-tension tester.
             st.divider()
 
             if is_inch:
-                r_t = calc_proof_load_inch(selected_thread, selected_grade)
+                r_t = calc_proof_load_inch(selected_thread, selected_grade, thread_series)
                 proof_cap_t = r_t["proof_load_lbf"]
             else:
                 r_t = calc_proof_load_metric(selected_thread, selected_grade)
@@ -381,6 +402,19 @@ measure K experimentally with a torque-tension tester.
             st.session_state.torque_data_for_pdf = {
                 "torque": torque_val, "K": K, "dia": dia, "clamp_force": clamp_result,
             }
+
+            # Validation warnings
+            if is_inch:
+                r_proof = calc_proof_load_inch(selected_thread, selected_grade, thread_series)
+                proof_for_val = r_proof["proof_load_lbf"]
+            else:
+                r_proof = calc_proof_load_metric(selected_thread, selected_grade)
+                proof_for_val = r_proof["proof_load_N"]
+            t_warnings = validate_torque_inputs(K, clamp_result, proof_for_val, force_unit)
+            if t_warnings:
+                st.divider()
+                st.subheader("⚠️ Validation Warnings")
+                render_validations(t_warnings)
 
             with st.expander("Show Equation"):
                 st.code(f"F_i = T / (K x d) = {torque_val} / ({K} x {dia}) = {clamp_result:,.1f} {force_unit}")
@@ -482,7 +516,7 @@ with tab3:
         st.markdown("**Governing Failure Mode**")
 
         if is_inch:
-            r_s2 = calc_proof_load_inch(selected_thread, selected_grade)
+            r_s2 = calc_proof_load_inch(selected_thread, selected_grade, thread_series)
             tensile_cap_s = r_s2["tensile_cap_lbf"]
         else:
             r_s2 = calc_proof_load_metric(selected_thread, selected_grade)
@@ -507,6 +541,16 @@ with tab3:
             "strip_load_ext": ext_strip,
             "strip_load_int": int_strip,
         }
+
+        # Validation warnings
+        s_warnings = validate_strip_inputs(
+            engagement, dia, length_unit,
+            tensile_cap_s, governing_strip, force_unit
+        )
+        if s_warnings:
+            st.divider()
+            st.subheader("⚠️ Validation Warnings")
+            render_validations(s_warnings)
 
         with st.expander("📐 Show Equations & Standard References"):
             st.markdown(f"""
@@ -574,11 +618,19 @@ with tab4:
     st.divider()
     st.subheader("Changelog")
     st.markdown("""
-**v2.10** *(current)*
+**v2.20** *(current)*
+| Change | Details |
+|---|---|
+| UNF thread support | Added all standard UNF sizes #4 through 1-1/2" (ASME B1.1-2003) |
+| Input validation | Engineering warnings on all three calc tabs — flags unsafe inputs and results |
+| TPI / Pitch display | Sidebar now shows threads per inch (UNC/UNF) or pitch (metric) for selected thread |
+
+**v2.10**
 | Change | Details |
 |---|---|
 | PDF export | Download full calculation report with equations, FoS, and standards references |
 | Tab header fix | Resolved vertical clipping of tab labels in browser |
+| Equation display fix | Resolved blank equation boxes in dark mode (Torque–Tension tab) |
 
 **v2.0**
 | Change | Details |

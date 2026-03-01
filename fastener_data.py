@@ -13,6 +13,11 @@ Standards Referenced:
 NOTE ON INCH GRADES:
   Previous version used MPa values for inch grades (incorrect).
   SAE J429 grades are defined in psi; metric conversions shown in comments.
+
+v2.20 CHANGES:
+  - Added UNF thread data (ASME B1.1-2003 / Machinery's Handbook 31e)
+  - Added input validation functions
+  - calc_proof_load_inch() now accepts thread_series argument to support both UNC and UNF
 """
 
 import math
@@ -83,6 +88,34 @@ UNC_THREADS = {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# UNF THREAD DATA  (ASME B1.1-2003 / Machinery's Handbook 31e)
+# Fine thread series — commonly used in aerospace, precision, and thin-walled
+# applications where finer pitch improves locking and allows finer adjustment.
+# Tuple: (nominal_dia_in, tpi, At_in2)
+# ─────────────────────────────────────────────────────────────────────────────
+UNF_THREADS = {
+    "#4":    (0.1120, 48,  0.00661),
+    "#6":    (0.1380, 40,  0.01015),
+    "#8":    (0.1640, 36,  0.01474),
+    "#10":   (0.1900, 32,  0.02000),
+    "#12":   (0.2160, 28,  0.02580),
+    "1/4":   (0.2500, 28,  0.03640),
+    "5/16":  (0.3125, 24,  0.05800),
+    "3/8":   (0.3750, 24,  0.08780),
+    "7/16":  (0.4375, 20,  0.11800),
+    "1/2":   (0.5000, 20,  0.15900),
+    "9/16":  (0.5625, 18,  0.20300),
+    "5/8":   (0.6250, 18,  0.25600),
+    "3/4":   (0.7500, 16,  0.37300),
+    "7/8":   (0.8750, 14,  0.50900),
+    "1":     (1.0000, 12,  0.66300),
+    "1-1/8": (1.1250, 12,  0.85600),
+    "1-1/4": (1.2500, 12,  1.07300),
+    "1-3/8": (1.3750, 12,  1.31500),
+    "1-1/2": (1.5000, 12,  1.58100),
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # METRIC COARSE THREAD DATA  (ASME B1.13M / ISO 68-1 / Machinery's Handbook)
 # Tuple: (nominal_dia_mm, pitch_mm, At_mm2)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -111,20 +144,27 @@ METRIC_THREADS = {
 # CALCULATION FUNCTIONS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def calc_proof_load_inch(size: str, grade: str) -> dict:
+def calc_proof_load_inch(size: str, grade: str, thread_series: str = "UNC") -> dict:
     """
     Proof Load (lbf) = Sp (psi) × At (in²)
     SAE J429:2021 §5.2
 
     Uses tabulated At from Machinery's Handbook — NOT computed from diameter.
-    Previous version incorrectly converted At to mm² for inch fasteners.
+    Supports both UNC and UNF thread series (ASME B1.1-2003).
+
+    Args:
+        size: Thread size string (e.g. "1/2", "#10")
+        grade: SAE grade string (e.g. "Grade 8")
+        thread_series: "UNC" or "UNF"
     """
-    dia, tpi, At = UNC_THREADS[size]
+    thread_table = UNF_THREADS if thread_series == "UNF" else UNC_THREADS
+    dia, tpi, At = thread_table[size]
     Sy, Su, Sp = INCH_GRADES[grade]
 
     return {
         "size": size,
         "grade": grade,
+        "thread_series": thread_series,
         "dia_in": dia,
         "tpi": tpi,
         "At_in2": At,
@@ -135,7 +175,7 @@ def calc_proof_load_inch(size: str, grade: str) -> dict:
         "tensile_cap_lbf":  Su * At,
         "yield_cap_lbf":    Sy * At,
         "standard": "SAE J429:2021 Table 1 / Machinery's Handbook 31e",
-        "At_source": "Tabulated (ASME B1.1 / Machinery's Hbk) — not calculated",
+        "At_source": f"Tabulated (ASME B1.1 {thread_series} / Machinery's Hbk) — not calculated",
     }
 
 
@@ -282,3 +322,164 @@ def calc_thread_strip_metric(size: str, engagement_mm: float,
         "equation_strip": "F_strip = τ × A_s,  τ ≈ 0.577 × Su (von Mises)",
         "standard": "FED-STD-H28/2B §2.9 / Shigley's MDET 10e §8-5 / ISO 68-1",
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INPUT VALIDATION  (v2.20)
+# Returns a list of warning dicts: {"level": "error"|"warning"|"info", "msg": str}
+# ─────────────────────────────────────────────────────────────────────────────
+
+def validate_tensile_inputs(applied_load: float, proof_load: float,
+                             tensile_cap: float, yield_cap: float,
+                             force_unit: str) -> list:
+    """
+    Validate tensile strength inputs and results.
+    Returns list of {"level": ..., "msg": ...} dicts, empty if all clear.
+    """
+    warnings = []
+
+    if applied_load <= 0:
+        warnings.append({
+            "level": "error",
+            "msg": "Applied load must be greater than 0.",
+        })
+        return warnings  # no point checking further
+
+    if applied_load > tensile_cap:
+        warnings.append({
+            "level": "error",
+            "msg": f"Applied load ({applied_load:,.1f} {force_unit}) exceeds tensile capacity "
+                   f"({tensile_cap:,.1f} {force_unit}). Fastener will fracture.",
+        })
+    elif applied_load > yield_cap:
+        warnings.append({
+            "level": "error",
+            "msg": f"Applied load ({applied_load:,.1f} {force_unit}) exceeds yield capacity "
+                   f"({yield_cap:,.1f} {force_unit}). Permanent deformation will occur.",
+        })
+    elif applied_load > proof_load:
+        warnings.append({
+            "level": "warning",
+            "msg": f"Applied load ({applied_load:,.1f} {force_unit}) exceeds proof load "
+                   f"({proof_load:,.1f} {force_unit}). Fastener may take a permanent set. "
+                   "Consider a higher grade or larger size.",
+        })
+
+    fos = tensile_cap / applied_load
+    if fos < 1.0:
+        pass  # already caught above
+    elif fos < 1.5:
+        warnings.append({
+            "level": "warning",
+            "msg": f"Factor of safety ({fos:.2f}) is below 1.5. Acceptable only for very well-controlled, "
+                   "static, non-critical loading. Review assumptions.",
+        })
+
+    return warnings
+
+
+def validate_torque_inputs(K: float, clamp_force: float, proof_load: float,
+                            force_unit: str) -> list:
+    """
+    Validate torque-tension inputs.
+    """
+    warnings = []
+
+    if K < 0.08:
+        warnings.append({
+            "level": "warning",
+            "msg": f"K = {K:.3f} is unusually low. Typical minimum for any lubricated condition "
+                   "is ~0.08. Verify lube condition and surface finish.",
+        })
+    elif K > 0.35:
+        warnings.append({
+            "level": "warning",
+            "msg": f"K = {K:.3f} is unusually high. Values above 0.35 suggest heavy corrosion, "
+                   "damaged threads, or incorrect surface condition. Verify inputs.",
+        })
+
+    if proof_load > 0:
+        preload_ratio = clamp_force / proof_load
+        if preload_ratio > 0.90:
+            warnings.append({
+                "level": "error",
+                "msg": f"Clamp force ({clamp_force:,.1f} {force_unit}) is {preload_ratio*100:.0f}% of proof load. "
+                       "Risk of yielding during tightening. Target 75–85% of proof load (VDI 2230 §5.4).",
+            })
+        elif preload_ratio > 0.85:
+            warnings.append({
+                "level": "warning",
+                "msg": f"Clamp force is {preload_ratio*100:.0f}% of proof load — at the upper end of the "
+                       "recommended range. Consider reducing torque slightly.",
+            })
+        elif preload_ratio < 0.50:
+            warnings.append({
+                "level": "info",
+                "msg": f"Clamp force is only {preload_ratio*100:.0f}% of proof load. "
+                       "Low preload increases risk of joint separation and fatigue. "
+                       "Typical target is 75–85% of proof load (VDI 2230 §5.4).",
+            })
+
+    return warnings
+
+
+def validate_strip_inputs(engagement: float, dia: float, length_unit: str,
+                           tensile_cap: float, governing_strip: float,
+                           force_unit: str) -> list:
+    """
+    Validate thread stripping inputs.
+    """
+    warnings = []
+
+    if dia > 0:
+        ratio = engagement / dia
+        if ratio < 0.8:
+            warnings.append({
+                "level": "error",
+                "msg": f"Thread engagement ({engagement:.3f} {length_unit}) is only {ratio:.2f}× diameter. "
+                       "Minimum recommended is 1.0× for steel, 1.5× for aluminum. "
+                       "Thread stripping failure likely.",
+            })
+        elif ratio < 1.0:
+            warnings.append({
+                "level": "warning",
+                "msg": f"Thread engagement ({engagement:.3f} {length_unit}) is {ratio:.2f}× diameter — "
+                       "below the 1.0× minimum recommendation for steel tapped holes. "
+                       "Increase engagement if possible.",
+            })
+        elif ratio < 1.5:
+            warnings.append({
+                "level": "info",
+                "msg": f"Engagement is {ratio:.2f}× diameter. Acceptable for steel. "
+                       "If tapped hole is aluminum, increase to ≥ 1.5× diameter.",
+            })
+
+    if tensile_cap < governing_strip:
+        pass  # stripping governs — already shown prominently in results
+    else:
+        fos_strip = governing_strip / tensile_cap if tensile_cap > 0 else 0
+        if fos_strip < 1.2:
+            warnings.append({
+                "level": "warning",
+                "msg": "Strip load is close to tensile capacity. "
+                       "Small increases in load could shift failure mode to stripping. "
+                       "Consider increasing engagement length.",
+            })
+
+    return warnings
+
+
+def render_validations(warnings: list) -> None:
+    """
+    Render validation warnings in Streamlit.
+    Import streamlit inside function to keep fastener_data.py GUI-independent
+    for use in scripts/tests without streamlit installed.
+    """
+    import streamlit as st
+    for w in warnings:
+        if w["level"] == "error":
+            st.error(f"🚨 {w['msg']}")
+        elif w["level"] == "warning":
+            st.warning(f"⚠️ {w['msg']}")
+        elif w["level"] == "info":
+            st.info(f"ℹ️ {w['msg']}")

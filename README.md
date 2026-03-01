@@ -2,7 +2,7 @@
 
 A web-based engineering tool for fastener strength calculations, joint design, and manufacturing considerations.
 
-**[▶ Launch the App](https://your-app.streamlit.app)** ← update after deployment
+**[▶ Launch the App](https://fastener-strength-tool.streamlit.app)**
 
 ---
 

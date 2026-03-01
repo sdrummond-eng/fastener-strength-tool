@@ -1,0 +1,13 @@
+# Build outputs
+build/
+dist/
+
+# Executables
+*.exe
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Optional (you can keep spec if you want)
+*.spec

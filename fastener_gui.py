@@ -240,7 +240,7 @@ ttk.Button(btn_frame, text="Clear", command=clear_fields).grid(row=0, column=3, 
 result_text = tk.Text(root, height=12, width=45)
 result_text.pack(pady=8)
 
-# ---- bindings ----
+# ---- bindings ---- test
 system_var.trace_add("write", update_dropdowns)
 update_dropdowns()
 

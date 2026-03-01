@@ -9,9 +9,9 @@ Standards Referenced:
   ISO 898-1:2013   Metric property class mechanical properties
   ASME B1.1-2003   UNC tensile stress area (tabulated)
   ASME B1.13M-2005 Metric tensile stress area (tabulated)
-  VDI 2230:2014    Torque–tension (nut factor method)
+  VDI 2230:2014    Torque-tension (nut factor method)
   FED-STD-H28/2B   Thread stripping shear area
-  Shigley's MDET 10e  §8-2, §8-5, Eq. 8-27
+  Shigley's MDET 10e  Sections 8-2, 8-5, Eq. 8-27
   Machinery's Handbook 31e  Thread stress area tables
 """
 
@@ -25,6 +25,7 @@ from fastener_data import (
     calc_torque_tension, calc_torque_tension_metric,
     calc_thread_strip_inch, calc_thread_strip_metric,
 )
+from pdf_report import generate_pdf_report
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE CONFIG
@@ -39,7 +40,9 @@ st.set_page_config(
 st.markdown("""
 <style>
   .block-container { padding-top: 1.5rem; }
-  .stTabs [data-baseweb="tab"] { font-size: 0.95rem; font-weight: 600; }
+  .stTabs [data-baseweb="tab-list"] { height: auto !important; overflow: visible !important; align-items: center !important; padding-top: 8px !important; }
+  .stTabs [data-baseweb="tab"] { font-size: 0.88rem !important; font-weight: 600 !important; height: auto !important; line-height: 1.5 !important; padding: 10px 16px !important; overflow: visible !important; }
+  .stTabs [data-baseweb="tab"] > div { overflow: visible !important; }
   .eq-box {
       background: #f0f4ff;
       border-left: 4px solid #3b5bdb;
@@ -63,11 +66,22 @@ st.markdown("""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SIDEBAR — Global Selector
+# SESSION STATE — persist calc results across tabs for PDF export
+# ─────────────────────────────────────────────────────────────────────────────
+if "tensile_data_for_pdf" not in st.session_state:
+    st.session_state.tensile_data_for_pdf = None
+if "torque_data_for_pdf" not in st.session_state:
+    st.session_state.torque_data_for_pdf = None
+if "strip_data_for_pdf" not in st.session_state:
+    st.session_state.strip_data_for_pdf = None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SIDEBAR — Global Selector + PDF Export
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("🔩 Fastener Calculator")
-    st.caption("SAE J429 · ISO 898-1 · VDI 2230 · ASME B1.1/B1.13M")
+    st.caption("v2.10  |  SAE J429 · ISO 898-1 · VDI 2230 · ASME B1.1/B1.13M")
     st.divider()
 
     unit_system = st.radio(
@@ -113,15 +127,57 @@ with st.sidebar:
     c2.metric(f"At ({area_unit})",   f"{At}")
     st.caption("At = tabulated tensile stress area (Machinery's Hbk 31e)")
 
+    st.divider()
+
+    # ── PDF EXPORT ────────────────────────────────────────────────────────────
+    st.markdown("**📄 Export Calculation Report**")
+
+    if st.session_state.tensile_data_for_pdf is not None:
+        try:
+            pdf_bytes = generate_pdf_report(
+                unit_system=unit_system,
+                thread=selected_thread,
+                grade=selected_grade,
+                tensile_data=st.session_state.tensile_data_for_pdf,
+                torque_data=st.session_state.torque_data_for_pdf,
+                strip_data=st.session_state.strip_data_for_pdf,
+            )
+            safe_thread = selected_thread.replace("/", "-").replace(" ", "_")
+            safe_grade  = selected_grade.replace(" ", "_")
+            filename = f"fastener_{safe_thread}_{safe_grade}.pdf"
+
+            st.download_button(
+                label="⬇️ Download PDF Report",
+                data=pdf_bytes,
+                file_name=filename,
+                mime="application/pdf",
+                use_container_width=True,
+                type="primary",
+            )
+            # Show what's included
+            sections = ["✅ Fastener Properties", "✅ Tensile Strength"]
+            if st.session_state.torque_data_for_pdf:
+                sections.append("✅ Torque–Tension")
+            if st.session_state.strip_data_for_pdf:
+                sections.append("✅ Thread Stripping")
+            sections.append("✅ Standards References")
+            for s in sections:
+                st.caption(s)
+
+        except Exception as e:
+            st.error(f"PDF generation error: {e}")
+    else:
+        st.info("Complete a calculation in any tab to enable PDF export.", icon="ℹ️")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4 = st.tabs([
-    "📐  Tensile Strength",
-    "🔧  Torque–Tension",
-    "🧵  Thread Stripping",
-    "📚  References & Notes",
+    "Tensile Strength",
+    "Torque–Tension",
+    "Thread Stripping",
+    "References",
 ])
 
 
@@ -145,9 +201,9 @@ with tab1:
         )
         st.caption("Thread and grade are selected in the sidebar →")
 
-        with st.expander("ℹ️ What is tensile stress area (Aₜ)?"):
+        with st.expander("ℹ️ What is tensile stress area (At)?"):
             st.markdown("""
-**Aₜ is a tabulated value**, not simply π/4 × d².
+**At is a tabulated value**, not simply π/4 × d².
 
 It represents the effective cross-sectional area of a threaded fastener
 that correlates with actual tensile test break loads. It accounts for the
@@ -155,10 +211,10 @@ helical thread geometry using an effective diameter midway between the
 pitch and minor diameters.
 
 The formula (for reference only — always use tabulated values):
-> **Inch:**  Aₜ = (π/4) × (d − 0.9743/n)²  *(ASME B1.1)*
-> **Metric:** Aₜ = (π/4) × (d − 0.9382p)²  *(ISO 68-1)*
+> **Inch:**  At = (π/4) × (d − 0.9743/n)²  *(ASME B1.1)*
+> **Metric:** At = (π/4) × (d − 0.9382p)²  *(ISO 68-1)*
 
-This calculator uses **tabulated Aₜ values from Machinery's Handbook 31e**,
+This calculator uses **tabulated At values from Machinery's Handbook 31e**,
 which match published test data and are required by SAE J429 / ISO 898-1.
             """)
 
@@ -177,21 +233,29 @@ which match published test data and are required by SAE J429 / ISO 898-1.
             yield_cap   = r["yield_cap_N"]
 
         m1, m2, m3 = st.columns(3)
-        m1.metric(f"Proof Load ({force_unit})",      f"{proof_cap:,.1f}")
-        m2.metric(f"Tensile Capacity ({force_unit})", f"{tensile_cap:,.1f}")
-        m3.metric(f"Yield Capacity ({force_unit})",   f"{yield_cap:,.1f}")
+        m1.metric(f"Proof Load ({force_unit})",       f"{proof_cap:,.1f}")
+        m2.metric(f"Tensile Capacity ({force_unit})",  f"{tensile_cap:,.1f}")
+        m3.metric(f"Yield Capacity ({force_unit})",    f"{yield_cap:,.1f}")
 
         st.divider()
         st.subheader("Factors of Safety vs. Applied Load")
 
+        fos_rows_for_pdf = []
         if applied > 0:
-            rows = [
+            rows_def = [
                 ("Proof Load",     proof_cap,   "Bolt won't take permanent set"),
                 ("Tensile (Ult.)", tensile_cap, "Bolt won't fracture"),
                 ("Yield",          yield_cap,   "Bolt stays in elastic range"),
             ]
-            for label, cap, desc in rows:
+            for label, cap, desc in rows_def:
                 fos, status, guidance = calc_factor_of_safety(cap, applied)
+                fos_rows_for_pdf.append((
+                    label,
+                    f"{cap:,.1f} {force_unit}",
+                    f"{applied:,.1f} {force_unit}",
+                    fos,
+                    status,
+                ))
                 with st.container():
                     ca, cb, cc = st.columns([1.4, 0.8, 2.8])
                     ca.markdown(f"**{label}**<br><small>{desc}</small>", unsafe_allow_html=True)
@@ -201,17 +265,22 @@ which match published test data and are required by SAE J429 / ISO 898-1.
         else:
             st.info("Enter an applied load > 0 to calculate factors of safety.")
 
-    # Equations expander
+        # Store in session state for PDF
+        tensile_pdf_data = dict(r)
+        tensile_pdf_data["applied_load"] = applied
+        tensile_pdf_data["fos_rows"] = fos_rows_for_pdf
+        st.session_state.tensile_data_for_pdf = tensile_pdf_data
+
     with st.expander("📐 Show Equations & Standard References"):
         st.markdown(f"""
 | Quantity | Equation | Applied Here | Standard |
 |---|---|---|---|
-| Proof Load | `F_proof = Sp × At` | `{Sp:,} × {At} = {proof_cap:,.1f} {force_unit}` | SAE J429 §5.2 / ISO 898-1 §9.1 |
-| Tensile Capacity | `F_tensile = Su × At` | `{Su:,} × {At} = {tensile_cap:,.1f} {force_unit}` | SAE J429 §5.2 / ISO 898-1 §9.1 |
-| Yield Capacity | `F_yield = Sy × At` | `{Sy:,} × {At} = {yield_cap:,.1f} {force_unit}` | SAE J429 §5.2 / ISO 898-1 §9.1 |
+| Proof Load | `F_proof = Sp x At` | `{Sp:,} x {At} = {proof_cap:,.1f} {force_unit}` | SAE J429 §5.2 / ISO 898-1 §9.1 |
+| Tensile Capacity | `F_tensile = Su x At` | `{Su:,} x {At} = {tensile_cap:,.1f} {force_unit}` | SAE J429 §5.2 / ISO 898-1 §9.1 |
+| Yield Capacity | `F_yield = Sy x At` | `{Sy:,} x {At} = {yield_cap:,.1f} {force_unit}` | SAE J429 §5.2 / ISO 898-1 §9.1 |
 | Factor of Safety | `FoS = F_capacity / F_applied` | — | Engineering convention |
         """)
-        st.markdown('<div class="ref-box">Tensile stress area Aₜ: tabulated per Machinery\'s Handbook 31e / ASME B1.1 (inch) / ASME B1.13M (metric). NOT computed from nominal diameter.</div>', unsafe_allow_html=True)
+        st.caption("At: tabulated per Machinery's Handbook 31e / ASME B1.1 (inch) / ASME B1.13M (metric). NOT computed from nominal diameter.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -230,10 +299,10 @@ with tab2:
     col_in2, col_out2 = st.columns([1, 1.6], gap="large")
 
     K_PRESETS = {
-        "As-received / unlubricated (K ≈ 0.20)": 0.20,
-        "Lightly oiled (K ≈ 0.15)":              0.15,
-        "MoS₂ / wax-based lube (K ≈ 0.12)":     0.12,
-        "Zinc-plated, dry (K ≈ 0.28)":           0.28,
+        "As-received / unlubricated (K = 0.20)": 0.20,
+        "Lightly oiled (K = 0.15)":              0.15,
+        "MoS2 / wax-based lube (K = 0.12)":     0.12,
+        "Zinc-plated, dry (K = 0.28)":           0.28,
         "Custom":                                 None,
     }
 
@@ -272,17 +341,15 @@ with tab2:
 The nut factor **K** lumps together thread friction, bearing surface friction,
 and thread helix angle into a single empirical coefficient.
 
-Typical values (VDI 2230 / Shigley's):
-
 | Condition | K |
 |---|---|
-| MoS₂ or wax lube | 0.10–0.14 |
+| MoS2 or wax lube | 0.10–0.14 |
 | Oil, light lube | 0.14–0.17 |
 | As-received (no lube) | 0.18–0.22 |
 | Zinc-plated, dry | 0.25–0.30 |
 
-⚠️ K has the largest uncertainty of any input (±20–30% is common). For
-critical joints, measure K experimentally with a torque-tension tester.
+K has typical real-world variability of +/-20-30%. For critical joints,
+measure K experimentally with a torque-tension tester.
             """)
 
     with col_out2:
@@ -290,50 +357,51 @@ critical joints, measure K experimentally with a torque-tension tester.
 
         if direction == "Clamp Force from Applied Torque":
             if is_inch:
-                res = calc_torque_tension(torque_val, K, dia)
-                clamp_result = res["clamp_force_lbf"]
+                res_t = calc_torque_tension(torque_val, K, dia)
+                clamp_result = res_t["clamp_force_lbf"]
             else:
-                res = calc_torque_tension_metric(torque_val, K, dia)
-                clamp_result = res["clamp_force_N"]
+                res_t = calc_torque_tension_metric(torque_val, K, dia)
+                clamp_result = res_t["clamp_force_N"]
 
             st.metric(f"Resulting Clamp Force ({force_unit})", f"{clamp_result:,.1f}")
             st.divider()
 
-            # Compare clamp force to proof load
             if is_inch:
-                r = calc_proof_load_inch(selected_thread, selected_grade)
-                proof_cap = r["proof_load_lbf"]
+                r_t = calc_proof_load_inch(selected_thread, selected_grade)
+                proof_cap_t = r_t["proof_load_lbf"]
             else:
-                r = calc_proof_load_metric(selected_thread, selected_grade)
-                proof_cap = r["proof_load_N"]
+                r_t = calc_proof_load_metric(selected_thread, selected_grade)
+                proof_cap_t = r_t["proof_load_N"]
 
-            fos_proof, status_proof, guidance_proof = calc_factor_of_safety(proof_cap, clamp_result)
-            st.markdown(f"**FoS: Clamp Force vs. Proof Load** — `{fos_proof:.2f}`  {status_proof}")
-            st.caption(guidance_proof)
-            st.caption("⚠️ Preload should target 75–85% of proof load for most structural joints (VDI 2230 §5.4)")
+            fos_t, status_t, guidance_t = calc_factor_of_safety(proof_cap_t, clamp_result)
+            st.markdown(f"**FoS: Clamp Force vs. Proof Load** — `{fos_t:.2f}`  {status_t}")
+            st.caption(guidance_t)
+            st.caption("Target preload: 75–85% of proof load for most structural joints (VDI 2230 §5.4)")
 
-            with st.expander("📐 Show Equation"):
-                st.markdown(f"""
-<div class="eq-box">F_i = T / (K × d) = {torque_val} / ({K} × {dia}) = {clamp_result:,.1f} {force_unit}</div>
-<div class="ref-box">VDI 2230:2014 Eq. (R8) / Shigley's MDET 10e Eq. 8-27</div>
-                """, unsafe_allow_html=True)
+            st.session_state.torque_data_for_pdf = {
+                "torque": torque_val, "K": K, "dia": dia, "clamp_force": clamp_result,
+            }
+
+            with st.expander("Show Equation"):
+                st.code(f"F_i = T / (K x d) = {torque_val} / ({K} x {dia}) = {clamp_result:,.1f} {force_unit}")
+                st.caption("Ref: VDI 2230:2014 Eq. (R8) / Shigley's MDET 10e Eq. 8-27")
 
         else:
-            # Required torque for target clamp force
+            torque_result = K * dia * target_clamp
             if is_inch:
-                torque_result = K * dia * target_clamp
                 torque_disp = f"{torque_result:,.1f} in·lbf  ({torque_result/12:,.1f} ft·lbf)"
             else:
-                torque_result = K * dia * target_clamp
                 torque_disp = f"{torque_result:,.1f} N·mm  ({torque_result/1000:,.2f} N·m)"
 
-            st.metric(f"Required Torque", torque_disp)
+            st.metric("Required Torque", torque_disp)
 
-            with st.expander("📐 Show Equation"):
-                st.markdown(f"""
-<div class="eq-box">T = K × d × F_i = {K} × {dia} × {target_clamp} = {torque_result:,.1f} {torque_unit}</div>
-<div class="ref-box">VDI 2230:2014 Eq. (R8) / Shigley's MDET 10e Eq. 8-27</div>
-                """, unsafe_allow_html=True)
+            st.session_state.torque_data_for_pdf = {
+                "torque": torque_result, "K": K, "dia": dia, "clamp_force": target_clamp,
+            }
+
+            with st.expander("Show Equation"):
+                st.code(f"T = K x d x F_i = {K} x {dia} x {target_clamp} = {torque_result:,.1f} {torque_unit}")
+                st.caption("Ref: VDI 2230:2014 Eq. (R8) / Shigley's MDET 10e Eq. 8-27")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -356,8 +424,8 @@ with tab3:
                 value=default_eng, step=0.01,
                 help="Axial length over which threads are in contact.",
             )
-            st.caption(f"Rule of thumb: ≥ 1.0× d for steel, ≥ 1.5× d for aluminum tapped holes")
-            st.caption(f"1.0× d for this size = {dia:.3f} in")
+            st.caption(f"Rule of thumb: >= 1.0x d for steel, >= 1.5x d for aluminum")
+            st.caption(f"1.0x d for this size = {dia:.3f} in")
         else:
             default_eng = round(dia * 1.0)
             engagement = st.number_input(
@@ -365,79 +433,90 @@ with tab3:
                 min_value=0.1, max_value=200.0,
                 value=float(default_eng), step=1.0,
             )
-            st.caption(f"Rule of thumb: ≥ 1.0× d steel, ≥ 1.5× d aluminum")
-            st.caption(f"1.0× d for this size = {dia:.0f} mm")
+            st.caption(f"Rule of thumb: >= 1.0x d steel, >= 1.5x d aluminum")
+            st.caption(f"1.0x d for this size = {dia:.0f} mm")
 
         nut_material = st.selectbox(
             "Nut/Tapped Hole Material",
-            ["Same as bolt (steel)", "Aluminum (reduce τ by ~40%)", "Custom shear strength"],
+            ["Same as bolt (steel)", "Aluminum (reduce tau by ~40%)", "Custom shear strength"],
         )
 
-        tau = Su * 0.577   # von Mises criterion: τ_ult ≈ 0.577 × Su
-        if nut_material == "Aluminum (reduce τ by ~40%)":
+        tau = Su * 0.577
+        if nut_material == "Aluminum (reduce tau by ~40%)":
             tau_int = tau * 0.60
         elif nut_material == "Custom shear strength":
             tau_int = st.number_input(
-                f"Custom τ for internal thread ({stress_unit})",
+                f"Custom tau for internal thread ({stress_unit})",
                 min_value=1.0, value=tau * 0.6, step=100.0,
             )
         else:
             tau_int = tau
 
-        st.caption(f"Bolt shear strength τ = 0.577 × Su = 0.577 × {Su:,} = {tau:,.0f} {stress_unit}")
+        st.caption(f"Bolt shear strength tau = 0.577 x Su = 0.577 x {Su:,} = {tau:,.0f} {stress_unit}")
 
     with col_out3:
         st.subheader("Results")
 
         if is_inch:
-            res = calc_thread_strip_inch(selected_thread, engagement, tau)
-            ext_area  = res["shear_area_ext_in2"]
-            int_area  = res["shear_area_int_in2"]
-            ext_strip = res["strip_load_ext_lbf"]
-            # Recalculate internal with potentially different tau
+            res_s = calc_thread_strip_inch(selected_thread, engagement, tau)
+            ext_area  = res_s["shear_area_ext_in2"]
+            int_area  = res_s["shear_area_int_in2"]
+            ext_strip = res_s["strip_load_ext_lbf"]
             int_strip = tau_int * int_area
-            d_minor   = res["d_minor_in"]
+            d_minor   = res_s["d_minor_in"]
         else:
-            res = calc_thread_strip_metric(selected_thread, engagement, tau)
-            ext_area  = res["shear_area_ext_mm2"]
-            int_area  = res["shear_area_int_mm2"]
-            ext_strip = res["strip_load_ext_N"]
+            res_s = calc_thread_strip_metric(selected_thread, engagement, tau)
+            ext_area  = res_s["shear_area_ext_mm2"]
+            int_area  = res_s["shear_area_int_mm2"]
+            ext_strip = res_s["strip_load_ext_N"]
             int_strip = tau_int * int_area
-            d_minor   = res["d_minor_mm"]
+            d_minor   = res_s["d_minor_mm"]
 
         m1, m2 = st.columns(2)
-        m1.metric(f"Bolt Thread Shear Area ({area_unit})",  f"{ext_area:.4f}" if is_inch else f"{ext_area:.1f}")
-        m2.metric(f"Nut Thread Shear Area ({area_unit})",   f"{int_area:.4f}" if is_inch else f"{int_area:.1f}")
-        m1.metric(f"Bolt Strip Load ({force_unit})",  f"{ext_strip:,.1f}")
+        m1.metric(f"Bolt Shear Area ({area_unit})",  f"{ext_area:.4f}" if is_inch else f"{ext_area:.1f}")
+        m2.metric(f"Nut Shear Area ({area_unit})",   f"{int_area:.4f}" if is_inch else f"{int_area:.1f}")
+        m1.metric(f"Bolt Strip Load ({force_unit})",     f"{ext_strip:,.1f}")
         m2.metric(f"Nut/Hole Strip Load ({force_unit})", f"{int_strip:,.1f}")
 
         st.divider()
         st.markdown("**Governing Failure Mode**")
 
         if is_inch:
-            r = calc_proof_load_inch(selected_thread, selected_grade)
-            tensile_cap = r["tensile_cap_lbf"]
+            r_s2 = calc_proof_load_inch(selected_thread, selected_grade)
+            tensile_cap_s = r_s2["tensile_cap_lbf"]
         else:
-            r = calc_proof_load_metric(selected_thread, selected_grade)
-            tensile_cap = r["tensile_cap_N"]
+            r_s2 = calc_proof_load_metric(selected_thread, selected_grade)
+            tensile_cap_s = r_s2["tensile_cap_N"]
 
         governing_strip = min(ext_strip, int_strip)
-        if tensile_cap <= governing_strip:
+        if tensile_cap_s <= governing_strip:
             st.success("✅ **Bolt tensile failure governs** — thread engagement is sufficient.")
-            st.caption("Preferred failure mode: bolt breaks before threads strip (more predictable, inspectable).")
+            st.caption("Preferred failure mode: bolt breaks before threads strip (predictable, inspectable).")
         else:
             st.warning("⚠️ **Thread stripping governs** — increase engagement length or upsize fastener.")
             st.caption("Thread stripping is a sudden, hard-to-detect failure mode. Avoid by design.")
 
+        # Store for PDF
+        st.session_state.strip_data_for_pdf = {
+            "engagement":     engagement,
+            "d_minor":        d_minor,
+            "shear_area_ext": ext_area,
+            "shear_area_int": int_area,
+            "tau":            tau,
+            "tau_int":        tau_int,
+            "strip_load_ext": ext_strip,
+            "strip_load_int": int_strip,
+        }
+
         with st.expander("📐 Show Equations & Standard References"):
             st.markdown(f"""
-| Quantity | Equation | Applied Here | Standard |
+| Quantity | Equation | Result | Standard |
 |---|---|---|---|
-| Minor diameter | `d_minor = d − 1.2990/n` (UNC) | `{dia} − {1.2990/(tpi if is_inch else 1):.4f} = {d_minor:.4f} {length_unit}` | ASME B1.1 |
-| Shear area (bolt) | `A_s = 0.5 × π × d_minor × Le` | `0.5π × {d_minor:.4f} × {engagement} = {ext_area:.4f} {area_unit}` | FED-STD-H28/2B §2.9 |
-| Shear area (nut) | `A_s = 0.5 × π × d_nom × Le` | `0.5π × {dia} × {engagement} = {int_area:.4f} {area_unit}` | FED-STD-H28/2B §2.9 |
-| Shear strength | `τ ≈ 0.577 × Su` (von Mises) | `0.577 × {Su:,} = {tau:,.0f} {stress_unit}` | Shigley's MDET 10e §8-5 |
-| Strip load | `F_strip = τ × A_s` | — | FED-STD-H28/2B / Shigley's §8-5 |
+| Minor diameter | `d_minor = d - 1.2990/n` | `{d_minor:.4f} {length_unit}` | ASME B1.1 |
+| Bolt shear area | `A_s = 0.5 x pi x d_minor x Le` | `{ext_area:.4f} {area_unit}` | FED-STD-H28/2B §2.9 |
+| Nut shear area | `A_s = 0.5 x pi x d_nom x Le` | `{int_area:.4f} {area_unit}` | FED-STD-H28/2B §2.9 |
+| Shear strength | `tau = 0.577 x Su` | `{tau:,.0f} {stress_unit}` | Shigley's MDET 10e §8-5 |
+| Strip load | `F_strip = tau x A_s` | — | FED-STD-H28/2B |
             """)
 
 
@@ -454,15 +533,15 @@ with tab4:
         ("ISO 898-1:2013",    "Mechanical properties of fasteners — Bolts, screws and studs",
          "Source of all metric property class mechanical properties."),
         ("ASME B1.1-2003",    "Unified Inch Screw Threads (UN/UNR Thread Form)",
-         "UNC thread geometry. Tensile stress area formula: At = (π/4)(d − 0.9743/n)²."),
+         "UNC thread geometry. Tensile stress area formula: At = (pi/4)(d - 0.9743/n)^2."),
         ("ASME B1.13M-2005",  "Metric Screw Threads — M Profile",
-         "Metric thread geometry. Tensile stress area: At = (π/4)(d − 0.9382p)²."),
+         "Metric thread geometry. Tensile stress area: At = (pi/4)(d - 0.9382p)^2."),
         ("VDI 2230:2014",     "Systematic Calculation of Highly Stressed Bolted Joints",
-         "Torque-tension relationship using nut factor method (Eq. R8): Fi = T/(K×d)."),
+         "Torque-tension relationship using nut factor method (Eq. R8): Fi = T/(K x d)."),
         ("FED-STD-H28/2B",    "Screw Thread Standards for Federal Services — Part 2B",
          "Thread stripping shear area formulas for UNC/UNF threads."),
         ("Shigley's MDET 10e","Shigley's Mechanical Engineering Design, 10th Edition (Budynas & Nisbett)",
-         "§8-2 tensile stress area, §8-5 thread stripping, Eq. 8-27 torque-tension."),
+         "Sections 8-2 tensile stress area, 8-5 thread stripping, Eq. 8-27 torque-tension."),
         ("Machinery's Hbk 31e","Machinery's Handbook, 31st Edition (Industrial Press)",
          "Tabulated tensile stress areas for all common UNC and metric coarse thread sizes."),
     ]
@@ -475,43 +554,46 @@ with tab4:
     st.markdown("""
 **Tensile Strength Tab**
 - Grade properties shown are for the most common diameter range. Some grades have
-  reduced values for larger diameters (e.g., SAE J429 Grade 5 ≥ 1\" dia). Always
+  reduced values for larger diameters (e.g., SAE J429 Grade 5 >= 1" dia). Always
   verify your exact size range against the full standard table.
-- Fatigue, dynamic, or impact loading are **not** accounted for. Use VDI 2230
-  Part 1 for fatigue-loaded bolted joints.
+- Fatigue, dynamic, or impact loading are **not** accounted for.
 
 **Torque–Tension Tab**
-- The nut factor K has significant real-world variability (±20–30% is common).
-  For critical joints, measure K experimentally on representative hardware.
-- Does not account for torque-induced torsional stress in the bolt shank
-  (combined tension + torsion). For critical joints, check combined stress per
-  VDI 2230 §5.5.
+- K has typical real-world variability of +/-20-30%. Measure experimentally for critical joints.
+- Does not account for combined tension + torsion stress. See VDI 2230 §5.5 for critical joints.
 
 **Thread Stripping Tab**
 - Uses the simplified FED-STD-H28 shear area formula (conservative).
-  Shigley's Eq. 8-29 provides a more detailed formulation accounting for
-  thread profile modifications.
 - Internal shear area uses nominal bolt diameter (conservative for standard nuts).
-  Actual nut/tapped hole minor diameter is slightly larger.
 
 **General**
-- Calculations assume fully threaded engagement (no partial threads at load point).
-- No corrosion, hydrogen embrittlement, elevated temperature, or coating effects
-  are included. Consult material-specific standards for these conditions.
+- Assumes fully threaded engagement and no partial threads at load point.
+- No corrosion, hydrogen embrittlement, elevated temperature, or coating effects included.
     """)
 
     st.divider()
-    st.subheader("Bug Fixes from v1.0 Desktop Tool")
+    st.subheader("Changelog")
     st.markdown("""
-The following issues were corrected in this version:
+**v2.10** *(current)*
+| Change | Details |
+|---|---|
+| PDF export | Download full calculation report with equations, FoS, and standards references |
+| Tab header fix | Resolved vertical clipping of tab labels in browser |
 
-| Issue | v1.0 (Tkinter) | Fixed Here |
-|---|---|---|
-| Inch stress area units | `inch_area()` converted in² → mm² incorrectly | At values tabulated in in², never converted |
-| Inch grade values | Used MPa values (ISO 8.8/10.9/12.9 data) for SAE grades | Corrected to SAE J429 psi values |
-| Standard references | None | All equations cite governing standard |
-| Thread stripping | Not implemented | Added (FED-STD-H28/2B) |
-| Torque–tension | Not implemented | Added (VDI 2230) |
+**v2.0**
+| Change | Details |
+|---|---|
+| Web app | Migrated from desktop Tkinter GUI to Streamlit web app |
+| Torque–Tension | Added nut-factor torque-tension calculation (VDI 2230:2014) |
+| Thread Stripping | Added thread shear area and strip load (FED-STD-H28/2B) |
+| Standards references | All equations now cite governing standard |
+| Inch stress area bug | Fixed incorrect mm² conversion — now uses tabulated in² values |
+| Inch grade values bug | Fixed SAE grades that incorrectly used ISO MPa values |
+
+**v1.0**
+| Change | Details |
+|---|---|
+| Initial release | Desktop Tkinter GUI, tensile/proof load for UNC and metric coarse threads |
     """)
 
     st.divider()
